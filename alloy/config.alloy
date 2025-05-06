@@ -127,6 +127,7 @@ otelcol.receiver.otlp "otlp_receiver" {
     output {
         traces = [
             otelcol.processor.batch.default.input,
+            otelcol.connector.spanlogs.autologging.input,
         ]
     }
 }
@@ -156,3 +157,82 @@ otelcol.exporter.otlp "tempo" {
     }
 }
 
+
+//Section 6
+// Alloy is like a "minimal" loki server
+loki.source.api "mythical" {
+     http {
+        listen_address = "0.0.0.0"
+        listen_port    = "3100"
+    }
+    forward_to = [loki.process.mythical.receiver]
+}
+
+loki.process "mythical" {
+    stage.static_labels {
+        values = {
+           // just set this label
+           service = "mythical",
+                 lelek = "1234",
+        }
+    }
+   stage.regex {
+        expression=`^.*?loggedtime=(?P<loggedtime>\S+)`
+   }
+
+   stage.timestamp {
+        source = "loggedtime"
+        format = "2006-01-02T15:04:05.000Z07:00" // 0000-00-00T00:00:000Z00:00
+    }
+
+    forward_to = [loki.write.mythical.receiver]
+}
+
+//Section 7
+otelcol.connector.spanlogs "autologging" {
+    roots = true
+    spans = true
+    processes = false
+
+    span_attributes = ["http.method", "http.status_code", "http.target"]
+    //these are the span attributes that I would like to include in the logs
+
+    output {
+      logs = [otelcol.exporter.loki.autologging.input]
+    }
+}
+
+otelcol.exporter.loki "autologging" {
+    forward_to = [loki.process.autologging.receiver]
+}
+
+// The Loki processor allows us to accept a Loki-formatted log entry and mutate it into
+// a set of fields for output.
+loki.process "autologging" {
+    stage.json {
+       expressions = {"body" = ""}
+    }
+
+    stage.output {
+       source = "body"
+    }
+
+    stage.logfmt {
+        mapping = {
+            http_method_extracted = "http.method", // ex will look for anythingi nthe log like "http.method=GET"
+            http_status_code_extracted = "http.status_code",
+            http_target_extracted = "http.target",
+
+        }
+    }
+
+    stage.labels {
+        values = {
+            method = "http_method_extraced",
+            status = "http_status_code_extracted",
+            target = "http_target_extracted",
+        }
+    }
+
+    forward_to = [loki.write.mythical.receiver]
+}
