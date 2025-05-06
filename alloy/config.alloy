@@ -2,5 +2,98 @@ livedebugging {
   enabled = true
 }
 
-// This is the config that Alloy will use. We will be filling this out
-// in the hands-on sections and exercises
+//Section 1
+
+logging {
+  format = "logfmt"
+  level = "debug"
+  write_to = [loki.relabel.alloy_logs.receiver]
+}
+
+
+loki.relabel "alloy_logs" {
+  forward_to = [loki.write.mythical.receiver]
+
+  // rules are executed in the order they written
+  rule {
+  // it's an upsert, find the group label and replace the value. Add the value if it doesn't exsist
+    target_label = "group"
+    replacement = "infrastructure"
+  }
+
+  rule {
+    target_label = "service"
+    replacement = "alloy"
+  }
+}
+
+loki.write "mythical" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}
+
+//Section 2
+discovery.http "service_discovery" {
+  url = "http://service-discovery/targets.json"
+  refresh_interval = "2s"
+}
+
+prometheus.scrape "infrastructure" {
+  scrape_interval = "2s"
+  scrape_timeout = "2s"
+
+  targets = discovery.http.service_discovery.targets
+  forward_to = [prometheus.remote_write.mimir.receiver]
+}
+
+prometheus.remote_write "mimir" {
+  endpoint {
+    url = "http://mimir:9009/api/v1/push"
+  }
+}
+
+//Section 3
+prometheus.exporter.postgres "mythical" {
+  data_source_names = ["postgresql://postgres:mythical@mythical-database:5432/postgres?sslmode=disable"]
+}
+
+prometheus.scrape "postgres" {
+  scrape_interval = "2s"
+  scrape_timeout = "2s"
+
+  targets = prometheus.exporter.postgres.mythical.targets
+  forward_to = [prometheus.relabel.postgres.receiver]
+}
+
+prometheus.relabel "postgres" {
+  forward_to = [prometheus.remote_write.mimir.receiver]
+
+  rule {
+    target_label = "group"
+    replacement = "infrastructure"
+  }
+
+  rule {
+    target_label = "service"
+    replacement = "postgres"
+  }
+
+  //What we have: postgres_table_rows_count{instance="postgresql://mythical-database:5432/postgres"}
+  //What we want: postgres_table_rows_count{instance="mythical-database:5432/postgres"}
+
+  rule {
+    // Replace the targeted label.
+    action = "replace"
+
+    // The label we want to replace is 'instance'.
+    target_label = "instance"
+
+    // Look in the existing 'instance' label for a value that matches the regex.
+    source_labels = ["instance"]
+    regex = "^postgresql://(.+)"
+
+    // Use the first value found in the 'instance' label that matches the regex as the replacement value.
+    replacement = "$1"
+  }
+}
