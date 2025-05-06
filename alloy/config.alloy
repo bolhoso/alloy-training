@@ -76,7 +76,7 @@ prometheus.relabel "postgres" {
 
   rule {
     target_label = "service"
-    replacement = "postgres"
+    replacement = "alloy"
   }
 
   //What we have: postgres_table_rows_count{instance="postgresql://mythical-database:5432/postgres"}
